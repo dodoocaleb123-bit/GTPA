@@ -1,0 +1,10 @@
+services:
+  gpta:
+    build: .
+    env_file: .env
+    ports: ["8000:8000"]      # put a TLS reverse proxy (Caddy/nginx) in front for production (HTTPS required)
+    volumes: ["gpta-data:/data"]
+    restart: unless-stopped
+volumes:
+  gpta-data:
+# The MT5 bridge runs on the Windows host (mt5_bridge/), NOT in this container.

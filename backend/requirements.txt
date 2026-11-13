@@ -1,0 +1,14 @@
+# Production stack per blueprint section 3. (Local development in the build sandbox ran on the
+# subset marked [sandbox]: starlette instead of fastapi, sqlite3 instead of SQLAlchemy, threads instead of APScheduler.)
+fastapi>=0.115          # app/main.py is written against Starlette; FastAPI wraps it
+starlette>=0.40         # [sandbox]
+uvicorn[standard]>=0.30 # [sandbox]
+pydantic>=2.7
+numpy>=1.26             # [sandbox]
+pandas>=2.2             # [sandbox]
+PyYAML>=6.0             # [sandbox]
+cryptography>=42        # [sandbox] credential encryption
+httpx>=0.27             # Twelve Data / Telegram / ShowMyTrades clients (imported lazily)
+requests>=2.31          # [sandbox] tests + MT5 bridge
+psycopg[binary]>=3.1    # PostgreSQL (store.py is plain SQL; see README "Going to PostgreSQL")
+pytest>=8

@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GPTA — Gold Desk</title>
+<style>
+  :root{
+    --bg:#0b0e13; --panel:#121720; --panel2:#171d28; --line:#232b3a; --text:#e6eaf2; --muted:#8a94a8;
+    --accent:#d4a840; --up:#2fbf8a; --down:#ef5b6b; --warn:#e9a23b; --info:#5b9cf5;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  *{box-sizing:border-box} html,body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  header{display:flex;align-items:center;gap:16px;padding:10px 20px;border-bottom:1px solid var(--line);background:var(--panel);position:sticky;top:0;z-index:5;flex-wrap:wrap}
+  .brand{font-weight:700;letter-spacing:.08em;color:var(--accent)} .brand small{color:var(--muted);font-weight:500;letter-spacing:.02em;margin-left:8px}
+  nav{display:flex;gap:2px;flex-wrap:wrap;flex:1}
+  nav button{background:none;border:0;color:var(--muted);padding:8px 9px;border-radius:6px;cursor:pointer;font:inherit}
+  nav button:hover{color:var(--text)} nav button.on{background:var(--panel2);color:var(--text);box-shadow:inset 0 -2px 0 var(--accent)}
+  .badge{font:600 11px var(--mono);padding:3px 8px;border-radius:99px;border:1px solid currentColor;letter-spacing:.06em;white-space:nowrap}
+  .LIVE,.ok,.PASS,.WIN,.AVAILABLE{color:var(--up)} .DELAYED,.warn,.WAITING_FOR_ENTRY,.QUALIFIED,.UNAVAILABLE_SOFT{color:var(--warn)}
+  .UNAVAILABLE,.FAIL,.bad,.LOSS,.INVALID,.TP_HIT_X{color:var(--down)} .SIMULATED,.HISTORICAL,.PAPER{color:var(--info)}
+  .TP_HIT{color:var(--up)} .SL_HIT{color:var(--down)}
+  main{padding:20px;max-width:1300px;margin:0 auto}
+  .grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(210px,1fr))}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+  .card h4{margin:0 0 6px;font:600 11px var(--mono);color:var(--muted);letter-spacing:.1em;text-transform:uppercase}
+  .big{font:600 26px var(--mono)} .sub{color:var(--muted);font-size:12px;margin-top:2px}
+  h2{font-size:16px;margin:22px 0 10px} h2:first-child{margin-top:0}
+  table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  th,td{padding:8px 12px;text-align:left;border-bottom:1px solid var(--line);font-size:13px;vertical-align:top}
+  th{color:var(--muted);font:600 11px var(--mono);letter-spacing:.08em;text-transform:uppercase;background:var(--panel2)}
+  tr:last-child td{border-bottom:0} td.n,th.n{text-align:right;font-family:var(--mono)}
+  .wrap{overflow-x:auto} .mono{font-family:var(--mono)}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+  select,input,textarea,button.btn{background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:7px 10px;font:inherit}
+  textarea{width:100%;min-height:140px;font-family:var(--mono);font-size:12px}
+  button.btn{cursor:pointer} button.btn.pri{background:var(--accent);color:#1a1405;border-color:var(--accent);font-weight:600}
+  canvas{width:100%;height:440px;background:var(--panel);border:1px solid var(--line);border-radius:10px;display:block}
+  .empty{color:var(--muted);padding:26px;text-align:center;border:1px dashed var(--line);border-radius:10px}
+  .stages{display:flex;gap:8px;flex-wrap:wrap}.stage{flex:1 1 150px;border:1px solid var(--line);border-radius:8px;padding:10px;background:var(--panel)}
+  .stage b{display:block;font:600 11px var(--mono);color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px}
+  .note{color:var(--muted);font-size:12px;margin:8px 0} details{margin:6px 0} summary{cursor:pointer;color:var(--muted)}
+  #gate{max-width:380px;margin:12vh auto;padding:24px} #gate input{width:100%;margin:12px 0}
+  .err{color:var(--down);min-height:1.2em}
+  @media (max-width:640px){main{padding:12px}.big{font-size:22px}}
+</style>
+</head>
+<body>
+<div id="gate" class="card" hidden>
+  <div class="brand">GPTA<small>GOLD DESK</small></div>
+  <p class="sub">Enter the dashboard access token (GPTA_API_TOKEN).</p>
+  <input id="tok" type="password" autocomplete="current-password" placeholder="Access token">
+  <button class="btn pri" id="go">Sign in</button><div class="err" id="gerr"></div>
+</div>
+<div id="app" hidden>
+  <header>
+    <div class="brand">GPTA<small>XAU/USD · paper mode</small></div>
+    <nav id="nav"></nav>
+    <span id="stat" class="badge UNAVAILABLE">…</span>
+    <button class="btn" id="out" title="Sign out">Sign out</button>
+  </header>
+  <main id="view"></main>
+</div>
+<script>
+"use strict";
+const PAGES=[["overview","Overview"],["market","Live Market"],["signals","Active Signals"],["strategy","Strategy Analysis"],
+ ["performance","Performance"],["history","Signal History"],["data","Data Centre"],["settings","Settings"],["system","System"]];
+const $=s=>document.querySelector(s);
+const esc=v=>String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const fx=(v,d=2)=>v==null||Number.isNaN(+v)?"—":(+v).toLocaleString("en-US",{minimumFractionDigits:d,maximumFractionDigits:d});
+const bd=(txt,cls)=>`<span class="badge ${esc(cls||txt)}">${esc(txt)}</span>`;
+const ago=s=>s==null?"—":s<90?Math.round(s)+"s ago":Math.round(s/60)+"m ago";
+let token=(()=>{try{return sessionStorage.getItem("gpta_token")||""}catch(e){return ""}})(), page="overview", timer=null, tf="M15";
+
+async function api(path,opt={}){
+  const r=await fetch(path,{...opt,headers:{"Authorization":"Bearer "+token,"Content-Type":"application/json",...(opt.headers||{})}});
+  if(r.status===401){signOut();throw new Error("unauthorized")}
+  const j=await r.json(); if(!r.ok) throw new Error(j.message||r.statusText); return j;
+}
+function signOut(){try{sessionStorage.removeItem("gpta_token")}catch(e){} token=""; clearInterval(timer); $("#app").hidden=true; $("#gate").hidden=false}
+$("#out").onclick=signOut;
+$("#go").onclick=async()=>{token=$("#tok").value.trim(); try{await api("/api/system/status"); try{sessionStorage.setItem("gpta_token",token)}catch(e){} boot()}catch(e){$("#gerr").textContent="Access denied."}};
+$("#tok").onkeydown=e=>{if(e.key==="Enter")$("#go").click()};
+
+function boot(){
+  $("#gate").hidden=true; $("#app").hidden=false;
+  $("#nav").innerHTML=PAGES.map(([k,l])=>`<button data-p="${k}" class="${k===page?"on":""}">${l}</button>`).join("");
+  $("#nav").onclick=e=>{const p=e.target.dataset.p; if(p){page=p; boot_nav(); render()}};
+  render(); clearInterval(timer); timer=setInterval(render,5000);
+}
+function boot_nav(){document.querySelectorAll("#nav button").forEach(b=>b.classList.toggle("on",b.dataset.p===page))}
+
+const R={};
+async function render(){
+  try{
+    const st=await api("/api/system/status"); const lab=st.data_label||"UNAVAILABLE";
+    $("#stat").className="badge "+lab; $("#stat").textContent="DATA "+lab;
+    $("#view").innerHTML=await R[page](st);
+    if(page==="market") drawChart();
+  }catch(e){ if(e.message!=="unauthorized") $("#view").innerHTML=`<div class="empty">Backend unreachable: ${esc(e.message)}</div>`}
+}
+const kpi=(t,v,s,cls="")=>`<div class="card"><h4>${esc(t)}</h4><div class="big ${cls}">${v}</div><div class="sub">${s||""}</div></div>`;
+
+R.overview=async st=>{
+  const [px,sig,an,nw]=await Promise.all([api("/api/market/price"),api("/api/signals/active"),api("/api/strategy/analysis"),api("/api/news/status")]);
+  const t=an.trace?.stages?.trend||{}, q=st.broker||{}, ns=nw.check?.status;
+  const trend=x=>x?bd(x.state,x.state==="BULLISH"?"ok":x.state==="BEARISH"?"bad":"warn"):"—";
+  return `<div class="grid">
+   ${kpi("XAU/USD",fx(px.price),bd(px.label)+" "+(px.age_seconds!=null?ago(px.age_seconds):""))}
+   ${kpi("H1 trend",trend(t.H1),"EMA50 "+fx(t.ema50)+" · EMA200 "+fx(t.ema200))}
+   ${kpi("M15 trend",trend(t.M15),"")}
+   ${kpi("Spread",q.connected?fx(q.spread):"—",q.connected?`bid ${fx(q.bid)} / ask ${fx(q.ask)} · ${ago(q.age_seconds)}`:bd("MT5 UNAVAILABLE","UNAVAILABLE"))}
+   ${kpi("News filter",ns==="PASS"?"CLEAR":ns==="FAIL"?"BLACKOUT":"BLOCKED",ns==="PASS"?`${nw.events} events cached`:ns==="FAIL"?esc(nw.check.detail?.event||"high-impact USD event"):"Calendar unreliable — signals blocked",ns==="PASS"?"ok":"bad")}
+   ${kpi("Active signal",sig.length?esc(sig[0].direction):"None",sig.length?esc(sig[0].signal_id)+" · "+esc(sig[0].state):"Waiting for a qualified setup")}
+   ${kpi("Last strategy cycle",st.last_cycle?new Date(st.last_cycle).toISOString().slice(11,19)+"Z":"—",st.last_error?esc(st.last_error):"no errors",st.last_error?"bad":"")}
+   ${kpi("Telegram",st.telegram_ok==null?"not configured":st.telegram_ok?"OK":"FAILING","", st.telegram_ok===false?"bad":"")}
+  </div>
+  <p class="note">Mode: <b>${esc(st.mode)}</b> · Broker execution: <b>${st.broker_execution_enabled?"ON":"OFF"}</b>. "Entry observed" never means a broker fill.</p>`;
+};
+
+R.market=async()=>{
+  return `<div class="row">${["M1","M5","M15","H1"].map(x=>`<button class="btn ${x===tf?"pri":""}" onclick="tf='${x}';render()">${x}</button>`).join("")}
+  <span class="note">Zones are M15-derived supply/demand; lines show the active signal's entry/SL/TP. Overlays are drawn from the engine's output, never recomputed here.</span></div><canvas id="cv"></canvas>`;
+};
+async function drawChart(){
+  const [c,z,sg]=await Promise.all([api("/api/market/candles?timeframe="+tf+"&limit=140"),api("/api/strategy/zones"),api("/api/signals/active")]);
+  const cv=$("#cv"); if(!cv) return; const dpr=devicePixelRatio||1, W=cv.clientWidth, H=cv.clientHeight; cv.width=W*dpr; cv.height=H*dpr;
+  const g=cv.getContext("2d"); g.scale(dpr,dpr); g.clearRect(0,0,W,H);
+  const k=c.candles; if(!k.length){g.fillStyle="#8a94a8";g.font="14px system-ui";g.fillText("No candles — data UNAVAILABLE",20,30);return}
+  const lv=[]; const sig=sg[0]; if(sig){lv.push(sig.entry,sig.sl,sig.tp)}
+  let lo=Math.min(...k.map(x=>x.low),...lv), hi=Math.max(...k.map(x=>x.high),...lv); const pad=(hi-lo)*.06||1; lo-=pad; hi+=pad;
+  const L=8,Rr=64,T=10,B=22, pw=W-L-Rr, ph=H-T-B, y=p=>T+(hi-p)/(hi-lo)*ph, bw=pw/k.length;
+  g.font="11px ui-monospace,monospace"; g.textBaseline="middle";
+  for(let i=0;i<=5;i++){const p=lo+(hi-lo)*i/5,yy=y(p);g.strokeStyle="#232b3a";g.beginPath();g.moveTo(L,yy);g.lineTo(L+pw,yy);g.stroke();g.fillStyle="#8a94a8";g.fillText(p.toFixed(2),L+pw+6,yy)}
+  z.forEach(zn=>{g.fillStyle=zn.type==="demand"?"rgba(47,191,138,.13)":"rgba(239,91,107,.13)";g.fillRect(L,y(zn.upper),pw,Math.max(1,y(zn.lower)-y(zn.upper)));
+    g.fillStyle=zn.type==="demand"?"#2fbf8a":"#ef5b6b";g.fillText(zn.type.toUpperCase()+" "+zn.status,L+4,y(zn.upper)+8)});
+  k.forEach((x,i)=>{const cx=L+i*bw+bw/2,up=x.close>=x.open,col=up?"#2fbf8a":"#ef5b6b";g.strokeStyle=g.fillStyle=col;
+    g.beginPath();g.moveTo(cx,y(x.high));g.lineTo(cx,y(x.low));g.stroke();
+    const t=y(Math.max(x.open,x.close)),h=Math.max(1,Math.abs(y(x.open)-y(x.close)));g.fillRect(cx-bw*.35,t,bw*.7,h)});
+  if(sig){[["ENTRY",sig.entry,"#5b9cf5"],["SL",sig.sl,"#ef5b6b"],["TP",sig.tp,"#2fbf8a"]].forEach(([n,p,col])=>{g.strokeStyle=g.fillStyle=col;g.setLineDash([6,4]);g.beginPath();g.moveTo(L,y(p));g.lineTo(L+pw,y(p));g.stroke();g.setLineDash([]);g.fillText(n+" "+p.toFixed(2),L+pw-92,y(p)-8)})}
+  g.fillStyle="#8a94a8";g.fillText(tf+" · "+c.label+" · "+c.provider,L+4,H-8);
+}
+
+R.signals=async()=>{
+  const s=await api("/api/signals/active");
+  if(!s.length) return `<h2>Active signals</h2><div class="empty">No active signals. GPTA publishes only fully qualified setups — silence is normal.</div>`;
+  return `<h2>Active signals</h2><div class="wrap"><table><tr><th>ID</th><th>Side</th><th class="n">Entry</th><th class="n">SL</th><th class="n">TP</th><th class="n">R</th><th>Status</th><th>Created</th><th>Expiry</th></tr>`+
+   s.map(x=>`<tr><td class="mono">${esc(x.signal_id)}</td><td>${bd(x.direction,x.direction==="BUY"?"ok":"bad")}</td><td class="n">${fx(x.entry_low)}–${fx(x.entry_high)}<br><span class="sub">ref ${fx(x.entry)}</span></td><td class="n">${fx(x.sl)}</td><td class="n">${fx(x.tp)}</td><td class="n">1:${fx(x.rr,2)}</td><td>${bd(x.state)}</td><td class="mono">${esc((x.created_at||"").slice(0,16))}</td><td class="mono">${esc((x.expiry||"").slice(11,16))} UTC</td></tr>`).join("")+`</table></div>`;
+};
+
+const chk=c=>`<tr><td>${esc(c.name)}</td><td>${bd(c.status)}</td><td class="mono">${esc(c.code)}</td></tr>`;
+R.strategy=async()=>{
+  const a=await api("/api/strategy/analysis"), s=a.trace?.stages||{}, tr=s.trend||{};
+  const stage=(n,v,c)=>`<div class="stage"><b>${n}</b>${v}${c?`<div class="sub">${c}</div>`:""}</div>`;
+  const stt=x=>x?bd(x.state,x.state==="BULLISH"?"ok":x.state==="BEARISH"?"bad":"warn"):"—";
+  return `<h2>Pipeline — latest cycle ${esc((a.trace?.time||"").slice(11,19))}</h2>
+  ${s.warmup&&!s.warmup.ok?`<div class="empty">Warm-up incomplete: ${esc(s.warmup.timeframe)} has ${s.warmup.have}/${s.warmup.need} candles. No analysis is run on an under-initialised sample.</div>`:""}
+  <div class="stages">
+   ${stage("Direction H1",stt(tr.H1),esc(tr.H1?.reason||""))}${stage("Direction M15",stt(tr.M15),esc(tr.M15?.reason||""))}
+   ${stage("EMA filter",tr.ema_state?bd(tr.ema_state,tr.ema_state==="BULLISH"?"ok":"bad"):bd("N/A","warn"),"")}
+   ${stage("Zones",(s.zones||[]).length+" active/tested","")}${stage("Sweeps",(s.sweeps||[]).length+" found","")}
+   ${stage("Setups in play",(s.setups||[]).length+"",(s.setups||[]).map(x=>esc(x.entry_status||x.mss_status)).join(", "))}
+  </div>
+  <h2>Recent decisions — why each setup passed or failed</h2>`+
+  (a.recent_decisions.length?a.recent_decisions.map(d=>`<details ${d===a.recent_decisions[0]?"open":""}><summary>${bd(d.result)} <span class="mono">${esc(d.setup_id)}</span> · ${esc(d.ts.slice(0,16))}${d.rejection_codes.length?" · "+esc(d.rejection_codes.join(", ")):""}</summary>
+   <div class="wrap"><table><tr><th>Check</th><th>Status</th><th>Code</th></tr>${d.checks.map(chk).join("")}</table></div></details>`).join(""):`<div class="empty">No setup has reached a decision yet.</div>`);
+};
+
+R.performance=async()=>{
+  const [p,eq]=await Promise.all([api("/api/performance/summary"),api("/api/performance/equity")]);
+  const bs=Object.entries(p.by_session||{});
+  return `<p>${bd("PAPER / SIMULATED","SIMULATED")} <span class="note">${esc(p.label)} — never broker-executed results.</span></p><div class="grid">
+   ${kpi("Total signals",p.total_signals)}${kpi("Entries observed",p.entries_observed)}${kpi("Completed",p.completed)}
+   ${kpi("Wins / Losses",`${p.wins} / ${p.losses}`)}${kpi("Win rate",p.win_rate==null?"—":fx(p.win_rate*(p.win_rate<=1?100:1),1)+"%")}
+   ${kpi("Profit factor",p.profit_factor==null?"—":fx(p.profit_factor))}${kpi("Net R",fx(p.net_r),"","")}${kpi("Max drawdown",fx(p.max_drawdown_r)+" R")}
+   ${kpi("Avg R",p.avg_r==null?"—":fx(p.avg_r))}${kpi("Avg duration",p.avg_duration_min==null?"—":fx(p.avg_duration_min,0)+" min")}
+   ${kpi("Max win streak",p.max_consecutive_wins)}${kpi("Max loss streak",p.max_consecutive_losses)}${kpi("Ambiguous TP/SL",p.ambiguous)}</div>
+  <h2>By trading session</h2>${bs.length?`<table><tr><th>Session</th><th class="n">Trades</th><th class="n">Net R</th></tr>${bs.map(([k,v])=>`<tr><td>${esc(k)}</td><td class="n">${esc(v.trades??v.n??"")}</td><td class="n">${fx(v.net_r??v.r)}</td></tr>`).join("")}</table>`:`<div class="empty">No completed paper trades yet.</div>`}
+  <h2>Equity curve (cumulative R)</h2><div class="note">${eq.points.length?eq.points.map(x=>fx(x.r)).join(" → "):"No data yet."}</div>`;
+};
+
+R.history=async()=>{
+  const h=await api("/api/signals/history");
+  const a=h.signals.map(s=>`<tr><td class="mono">${esc(s.signal_id)}</td><td>${esc(s.direction)}</td><td class="n">${fx(s.entry)}</td><td class="n">${fx(s.rr)}</td><td>${bd(s.state)}</td><td class="mono">${esc(s.created_at.slice(0,16))}</td></tr>`).join("");
+  const b=h.non_qualified_setups.map(s=>`<tr><td class="mono">${esc(s.setup_id)}</td><td>${esc(s.direction)}</td><td>${bd(s.result)}</td><td>${esc(s.rejection_codes.join(", "))}</td><td class="mono">${esc(s.created_at.slice(0,16))}</td></tr>`).join("");
+  return `<h2>Qualified signals</h2>${a?`<div class="wrap"><table><tr><th>ID</th><th>Side</th><th class="n">Entry</th><th class="n">R</th><th>State</th><th>Created</th></tr>${a}</table></div>`:`<div class="empty">None yet.</div>`}
+  <h2>Rejected / invalidated / expired setups</h2>${b?`<div class="wrap"><table><tr><th>Setup</th><th>Side</th><th>Result</th><th>Reasons</th><th>Time</th></tr>${b}</table></div>`:`<div class="empty">None yet.</div>`}`;
+};
+
+R.data=async st=>{
+  const [d,tfs,n]=await Promise.all([api("/api/market/data-health"),api("/api/market/timeframes"),api("/api/news/status")]);
+  const q=st.broker||{};
+  return `<h2>Twelve Data — candle feeds ${bd(d.label)}</h2><div class="wrap"><table><tr><th>TF</th><th>Health</th><th class="n">Stored</th><th>Last completed</th><th>Last OK</th><th>Issues / error</th></tr>`+
+   Object.entries(tfs).map(([k,v])=>`<tr><td>${k}</td><td>${bd(v.healthy?"HEALTHY":"UNHEALTHY",v.healthy?"ok":"bad")}</td><td class="n">${v.stored}</td><td class="mono">${esc((v.last_completed||"—").slice(0,16))}</td><td class="mono">${esc((v.last_ok||"—").slice(11,19))}</td><td>${esc(v.error||(v.issues||[]).join("; "))}</td></tr>`).join("")+`</table></div>
+  <p class="note">Baseline: ${d.baseline_requests_per_day.toLocaleString()} requests/day (4/min) before retries. Actual provider-reported credits are tracked per key.</p>
+  <h2>API credentials</h2>${d.credentials.length?`<table><tr><th>Key</th><th>Status</th><th class="n">Requests</th><th class="n">Failures</th><th class="n">Credits left</th><th>Available at</th></tr>${d.credentials.map(c=>`<tr><td>${esc(c.label)}</td><td>${bd(c.status)}</td><td class="n">${c.requests}</td><td class="n">${c.failures}</td><td class="n">${c.credits_left??"—"}</td><td class="mono">${esc(c.available_at||"—")}</td></tr>`).join("")}</table>`:`<div class="empty">No credentials loaded.</div>`}
+  <h2>MetaTrader 5</h2><div class="grid">${kpi("Bid",q.connected?fx(q.bid):"—")}${kpi("Ask",q.connected?fx(q.ask):"—")}${kpi("Spread",q.connected?fx(q.spread):"—")}${kpi("Quote age",q.age_seconds==null?"—":fx(q.age_seconds,1)+"s","",q.age_seconds>5?"bad":"")}${kpi("Server",esc(q.server||"—"))}</div>
+  <h2>Economic calendar (ShowMyTrades)</h2><div class="grid">${kpi("Reliable",n.reliable?"YES":"NO","",n.reliable?"ok":"bad")}${kpi("Events cached",n.events)}${kpi("Calendar age",n.age_minutes==null?"never loaded":fx(n.age_minutes,0)+" min")}</div>`;
+};
+
+R.settings=async()=>{
+  const [s,v]=await Promise.all([api("/api/settings"),api("/api/strategy/versions")]);
+  return `<h2>Strategy configuration <span class="badge SIMULATED">v ${esc(s.version)}</span></h2>
+  <p class="note">Changes are validated, saved as a new strategy version and audited. Locked: paper mode, broker execution off, minimum R ≥ 2, spread/news strict mode.</p>
+  <textarea id="chg" placeholder='{"risk":{"stop_buffer_atr":0.3}}'></textarea>
+  <div class="row"><input id="note" placeholder="Reason for change (audit note)" style="flex:1"><button class="btn pri" id="save">Save as new version</button></div><div id="msg" class="note"></div>
+  <details><summary>Current configuration</summary><pre class="mono" style="overflow:auto;font-size:12px">${esc(JSON.stringify(s.config,null,2))}</pre></details>
+  <h2>Version history</h2><table><tr><th>Version</th><th>Created</th><th>Note</th></tr>${v.map(x=>`<tr><td class="mono">${esc(x.version)}</td><td class="mono">${esc(x.created_at.slice(0,19))}</td><td>${esc(x.note)}</td></tr>`).join("")}</table>`;
+};
+document.addEventListener("click",async e=>{
+  if(e.target.id!=="save") return; const m=$("#msg");
+  try{const r=await api("/api/settings",{method:"PUT",body:JSON.stringify({changes:JSON.parse($("#chg").value),note:$("#note").value})});
+    m.className="note ok"; m.textContent="Saved as version "+r.version+": "+r.applied.map(a=>`${a.path} ${a.old}→${a.new}`).join(", ")}
+  catch(x){m.className="note bad"; m.textContent="Rejected: "+x.message}
+});
+
+R.system=async st=>{
+  const logs=await api("/api/system/logs?limit=40"), sc=st.scheduler||{};
+  return `<div class="grid">${kpi("Backend","OK","",st.database?"ok":"bad")}${kpi("Database",st.database?"OK":"DOWN","",st.database?"ok":"bad")}
+   ${kpi("Scheduler",sc.running?"RUNNING":"STOPPED","last tick "+esc((sc.heartbeat?.tick||"—").slice(11,19)),sc.running?"ok":"bad")}
+   ${kpi("Strategy version",esc(st.strategy_version),"")}${kpi("Last cycle",esc((st.last_cycle||"—").slice(11,19)))}${kpi("Last error",esc(st.last_error||"none"),"",st.last_error?"bad":"")}</div>
+  <h2>Workers</h2><div class="note">${Object.entries(sc.workers||{}).map(([k,v])=>`${esc(k)}: ${v?"alive":"dead"}`).join(" · ")||"none"}</div>
+  <h2>Recent logs</h2>${logs.length?`<div class="wrap"><table><tr><th>Time</th><th>Level</th><th>Source</th><th>Message</th></tr>${logs.map(l=>`<tr><td class="mono">${esc(l.ts.slice(0,19))}</td><td>${bd(l.level,l.level==="ERROR"?"bad":l.level==="WARN"?"warn":"ok")}</td><td>${esc(l.source)}</td><td>${esc(l.message)}</td></tr>`).join("")}</table></div>`:`<div class="empty">No log entries.</div>`}`;
+};
+
+if(token){api("/api/system/status").then(boot).catch(()=>{$("#gate").hidden=false})}else{$("#gate").hidden=false}
+</script>
+</body>
+</html>

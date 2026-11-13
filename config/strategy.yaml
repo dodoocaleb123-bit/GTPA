@@ -1,0 +1,69 @@
+# GPTA central strategy configuration (blueprint section 23).
+# Values are PROPOSED starting parameters, not proven optimal. Every change must be saved
+# as a new strategy version (see database.store.save_strategy_version).
+instrument: XAU/USD
+timeframes: [M1, M5, M15, H1]
+collection:
+  interval_seconds: 60
+  independent_provider_requests: true
+  history_bars: {M1: 500, M5: 500, M15: 600, H1: 600}   # warm-up depth
+trend:
+  primary: H1
+  confirmation: M15
+  ema_fast: 50
+  ema_slow: 200
+  swing_left: 2
+  swing_right: 2
+  bos_atr_buffer: 0.05
+  require_ema_confirmation: true   # ASSUMPTION: blueprint 7.2 calls EMA50/200 an additional filter; applied to H1 direction
+zones:
+  source_timeframe: M15
+  zone_expiry_candles: 96
+  overlap_threshold: 0.50
+liquidity:
+  sweep_timeframe: M15
+  require_close_reclaim: true
+  reclaim_window_candles: 3      # ASSUMPTION (blueprint silent): reclaim within 3 completed M15 candles
+  sweep_lookback_candles: 8      # only sweeps this recent are still tradeable
+mss:
+  timeframe: M5
+  atr_buffer: 0.05
+  minimum_body_ratio: 0.50
+entry:
+  refinement_timeframe: M5
+  confirmation_timeframe: M1
+  require_retest: true
+  cancel_if_target_reached: true
+  displacement_lookback_candles: 10   # ASSUMPTION: formal displacement definition, see README
+volatility:
+  atr_period: 14
+  lookback: 100
+  lower_percentile: 10
+  upper_percentile: 90
+risk:
+  minimum_reward_risk: 2.0
+  stop_buffer_atr: 0.25
+  maximum_stop_atr_multiple: 5.0   # ASSUMPTION: "excessively wide" is undefined in blueprint
+  maximum_active_signals: 1
+spread:
+  enabled: true
+  maximum_stop_distance_ratio: 0.10
+  rolling_median_multiplier: 1.5
+  rolling_observations: 60
+  minimum_observations: 30         # ASSUMPTION: fewer than this => check UNAVAILABLE (fails safe)
+  maximum_quote_age_seconds: 5
+  block_on_failure: true
+news:
+  enabled: true
+  currencies: [USD]
+  pre_event_minutes: 30
+  post_event_minutes: 30
+  maximum_calendar_age_minutes: 360   # ASSUMPTION: older cache => news check UNAVAILABLE (strict mode)
+  block_on_failure: true
+signals:
+  expiry_after_mss_minutes: 60
+execution:
+  mode: paper
+  broker_execution_enabled: false
+paper:
+  slippage: 0.05          # price units (USD) per fill, assumption
