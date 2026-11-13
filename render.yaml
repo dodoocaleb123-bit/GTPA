@@ -17,6 +17,10 @@ services:
       - { key: TWELVE_DATA_KEY_2, sync: false }
       - { key: TWELVE_DATA_KEY_3, sync: false }
       - { key: TWELVE_DATA_KEY_4, sync: false }
+      - { key: TWELVE_DATA_KEY_5, sync: false }
+      - { key: TWELVE_DATA_KEY_6, sync: false }
+      - { key: TWELVE_DATA_KEY_7, sync: false }
+      - { key: TWELVE_DATA_KEY_8, sync: false }
       - { key: TELEGRAM_BOT_TOKEN, sync: false }
       - { key: TELEGRAM_CHAT_ID, sync: false }
       - { key: SHOWMYTRADES_URL, sync: false }

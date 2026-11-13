@@ -317,3 +317,14 @@ def test_oos_split_is_chronological():
     f = build_buy_scenario()
     a, b, cut = split_out_of_sample(f, 0.7)
     assert a["M1"]["time"].max() < cut <= b["M1"]["time"].min()
+
+
+def test_credential_manager_reads_up_to_eight_env_keys_and_ignores_empty_slots(monkeypatch):
+    from app.data.credential_manager import CredentialManager
+    for i in range(1, 10):
+        monkeypatch.delenv(f"TWELVE_DATA_KEY_{i}", raising=False)
+    for i in (1, 2, 5, 8, 9):                       # slot 9 is beyond the supported maximum
+        monkeypatch.setenv(f"TWELVE_DATA_KEY_{i}", f"secret{i}")
+    cm = CredentialManager.from_env()
+    labels = {s["label"] for s in cm.status()}
+    assert labels == {"key1", "key2", "key5", "key8"}

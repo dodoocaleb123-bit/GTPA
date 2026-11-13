@@ -44,6 +44,9 @@ class NoEligibleCredential(Exception):
     pass
 
 
+MAX_KEYS = 8   # TWELVE_DATA_KEY_1 .. TWELVE_DATA_KEY_8; unset/empty slots are ignored
+
+
 class CredentialManager:
     def __init__(self, keys: dict[str, str], clock=lambda: datetime.now(timezone.utc),
                  fernet_key: str | None = None):
@@ -55,7 +58,7 @@ class CredentialManager:
 
     @classmethod
     def from_env(cls, **kw) -> "CredentialManager":
-        keys = {f"key{i}": os.environ.get(f"TWELVE_DATA_KEY_{i}", "") for i in range(1, 5)}
+        keys = {f"key{i}": os.environ.get(f"TWELVE_DATA_KEY_{i}", "") for i in range(1, MAX_KEYS + 1)}
         return cls(keys, **kw)
 
     # -- selection ---------------------------------------------------------------------------
