@@ -328,3 +328,19 @@ def test_credential_manager_reads_up_to_eight_env_keys_and_ignores_empty_slots(m
     cm = CredentialManager.from_env()
     labels = {s["label"] for s in cm.status()}
     assert labels == {"key1", "key2", "key5", "key8"}
+
+
+def test_sticky_mode_uses_one_key_for_all_concurrent_requests_and_fails_over_in_order():
+    from app.data.credential_manager import CredentialManager
+    cm = CredentialManager({"key1": "a", "key2": "b", "key3": "c"}, sticky=True)
+    first = [cm.acquire()[0] for _ in range(4)]               # four concurrent requests, nothing released yet
+    assert first == ["key1"] * 4
+    for _ in range(4):
+        cm.release_ok("key1")
+    assert cm.acquire()[0] == "key1"
+    cm.release_error("key1", 429, "You have run out of API credits for the day")
+    assert cm.acquire()[0] == "key2"                          # key1 parked until the daily reset
+    cm.release_error("key2", 401, "invalid apikey")
+    assert cm.acquire()[0] == "key3"
+    st = {s["label"]: s["requests"] for s in cm.status()}
+    assert st["key1"] == 5 and st["key2"] == 1 and st["key3"] == 1

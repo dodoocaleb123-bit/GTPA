@@ -49,7 +49,8 @@ MAX_KEYS = 8   # TWELVE_DATA_KEY_1 .. TWELVE_DATA_KEY_8; unset/empty slots are i
 
 class CredentialManager:
     def __init__(self, keys: dict[str, str], clock=lambda: datetime.now(timezone.utc),
-                 fernet_key: str | None = None):
+                 fernet_key: str | None = None, sticky: bool = False):
+        self.sticky = sticky
         self._f = Fernet((fernet_key or os.environ.get("GPTA_SECRET_KEY") or Fernet.generate_key()))
         self._clock = clock
         self._lock = threading.Lock()
@@ -59,6 +60,9 @@ class CredentialManager:
     @classmethod
     def from_env(cls, **kw) -> "CredentialManager":
         keys = {f"key{i}": os.environ.get(f"TWELVE_DATA_KEY_{i}", "") for i in range(1, MAX_KEYS + 1)}
+        # GPTA_KEY_MODE=sticky (default): every request uses the first working key; the next key takes over only
+        # when it is exhausted/rate-limited/invalid. GPTA_KEY_MODE=rotate: round-robin across keys.
+        kw.setdefault("sticky", os.environ.get("GPTA_KEY_MODE", "sticky").lower() != "rotate")
         return cls(keys, **kw)
 
     # -- selection ---------------------------------------------------------------------------
@@ -74,6 +78,15 @@ class CredentialManager:
             now = self._clock()
             self._recover(now)
             labels = list(self.creds)
+            if self.sticky:
+                # first usable key in order; a key already IN_USE by a concurrent request of the same cycle is shared
+                for lbl in labels:
+                    c = self.creds[lbl]
+                    if c.status in (KeyStatus.AVAILABLE, KeyStatus.IN_USE):
+                        c.status, c.last_used = KeyStatus.IN_USE, now
+                        c.requests += 1
+                        return lbl, self._f.decrypt(c._secret).decode()
+                raise NoEligibleCredential("all credentials unavailable")
             for off in range(len(labels)):
                 lbl = labels[(self._rr + off) % len(labels)]
                 c = self.creds[lbl]
