@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS telegram_messages(id INTEGER PRIMARY KEY, dedupe_key 
 CREATE TABLE IF NOT EXISTS strategy_versions(version TEXT PRIMARY KEY, created_at TEXT, config TEXT, note TEXT);
 CREATE TABLE IF NOT EXISTS audit_logs(id INTEGER PRIMARY KEY, ts TEXT, actor TEXT, action TEXT, detail TEXT);
 CREATE TABLE IF NOT EXISTS system_logs(id INTEGER PRIMARY KEY, ts TEXT, level TEXT, source TEXT, message TEXT);
+CREATE TABLE IF NOT EXISTS credential_state(label TEXT PRIMARY KEY, fp TEXT, status TEXT, available_at TEXT, requests INTEGER, failures INTEGER, last_error TEXT);
 CREATE TABLE IF NOT EXISTS backtest_runs(run_id TEXT PRIMARY KEY, created_at TEXT, config TEXT, metrics TEXT);
 """
 

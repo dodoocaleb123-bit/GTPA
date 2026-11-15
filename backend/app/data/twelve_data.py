@@ -25,30 +25,42 @@ class CandleProvider(Protocol):
 class TwelveDataProvider:
     def __init__(self, creds: CredentialManager, symbol: str = "XAU/USD", timeout: float = 10.0):
         self.creds, self.symbol, self.timeout = creds, symbol, timeout
+        self.last_detail: dict[str, str] = {}      # latest provider failure text per timeframe (redacted)
+
+    KEY_FAILURES = (401, 403, 429)    # failures that belong to the key, not the request: try the next key at once
 
     def fetch(self, timeframe: str, outputsize: int, now: datetime):
         import httpx
-        try:
-            label, key = self.creds.acquire()
-        except NoEligibleCredential:
-            return None, "NO_CREDENTIAL"
-        try:
-            r = httpx.get(BASE, params={"symbol": self.symbol, "interval": TD_INTERVAL[timeframe],
-                                        "outputsize": outputsize, "timezone": "UTC", "order": "ASC",
-                                        "apikey": key}, timeout=self.timeout)
-            body = r.json()
-        except Exception as e:  # network/JSON failure: never leak the key
-            self.creds.release_error(label, None, self.creds.redact(str(e)))
-            return None, "NETWORK_ERROR"
-        code = body.get("code") if isinstance(body, dict) else None
-        if r.status_code != 200 or (isinstance(body, dict) and body.get("status") == "error"):
-            self.creds.release_error(label, int(code or r.status_code), str(body.get("message", "")))
-            return None, f"PROVIDER_{code or r.status_code}"
-        hdr = r.headers
-        used = _int(hdr.get("api-credits-used"))
-        left = _int(hdr.get("api-credits-left"))
-        self.creds.release_ok(label, used, left)
-        return body, None
+        last: tuple[None, str] = (None, "NO_CREDENTIAL")
+        for _ in range(max(1, len(self.creds.creds))):
+            try:
+                label, key = self.creds.acquire()
+            except NoEligibleCredential:
+                return last
+            try:
+                r = httpx.get(BASE, params={"symbol": self.symbol, "interval": TD_INTERVAL[timeframe],
+                                            "outputsize": outputsize, "timezone": "UTC", "order": "ASC",
+                                            "apikey": key}, timeout=self.timeout)
+                body = r.json()
+            except Exception as e:  # network/JSON failure: never leak the key
+                self.creds.release_error(label, None, self.creds.redact(str(e)))
+                self.last_detail[timeframe] = f"{label}: network error"
+                return None, "NETWORK_ERROR"
+            code = body.get("code") if isinstance(body, dict) else None
+            if r.status_code != 200 or (isinstance(body, dict) and body.get("status") == "error"):
+                status = int(code or r.status_code)
+                msg = str(body.get("message", "")) if isinstance(body, dict) else ""
+                self.creds.release_error(label, status, msg)
+                self.last_detail[timeframe] = f"{label}: HTTP {status} {self.creds.redact(msg)[:160]}"
+                last = (None, f"PROVIDER_{code or r.status_code}")
+                if status in self.KEY_FAILURES:
+                    continue                      # this key is now parked; retry this same request on the next key
+                return last
+            hdr = r.headers
+            self.creds.release_ok(label, _int(hdr.get("api-credits-used")), _int(hdr.get("api-credits-left")))
+            self.last_detail.pop(timeframe, None)
+            return body, None
+        return last
 
 
 def _int(v):

@@ -344,3 +344,55 @@ def test_sticky_mode_uses_one_key_for_all_concurrent_requests_and_fails_over_in_
     assert cm.acquire()[0] == "key3"
     st = {s["label"]: s["requests"] for s in cm.status()}
     assert st["key1"] == 5 and st["key2"] == 1 and st["key3"] == 1
+
+
+def _fake_httpx(monkeypatch, behaviour):
+    import sys
+    from types import SimpleNamespace as NS
+    calls = []
+    def get(url, params, timeout):
+        calls.append(params["apikey"])
+        status, body = behaviour(params["apikey"])
+        return NS(status_code=status, json=lambda: body, headers={"api-credits-used": "1", "api-credits-left": "799"})
+    monkeypatch.setitem(sys.modules, "httpx", NS(get=get))
+    return calls
+
+
+def test_provider_fails_over_to_next_key_in_the_same_request_and_records_why(monkeypatch):
+    from app.data.credential_manager import CredentialManager
+    from app.data.twelve_data import TwelveDataProvider
+    daily = {"code": 429, "status": "error", "message": "You have run out of API credits for the day. 801 used, limit 800."}
+    ok = {"status": "ok", "values": []}
+    calls = _fake_httpx(monkeypatch, lambda k: (429, daily) if k in ("KEY_A_1111", "KEY_B_2222") else (200, ok))
+    cm = CredentialManager({"key1": "KEY_A_1111", "key2": "KEY_B_2222", "key3": "KEY_C_3333"}, sticky=True)
+    prov = TwelveDataProvider(cm)
+    payload, err = prov.fetch("M1", 5, None)
+    assert err is None and payload == ok and calls == ["KEY_A_1111", "KEY_B_2222", "KEY_C_3333"]          # one request, no lost cycle
+    st = {s["label"]: s["status"] for s in cm.status()}
+    assert st["key1"] == st["key2"] == "QUOTA_EXHAUSTED" and st["key3"] == "AVAILABLE"
+    assert prov.last_detail == {}                                    # cleared after success
+    # all keys refused -> clear error + the provider's own message is kept for the dashboard/logs
+    calls.clear(); _fake_httpx(monkeypatch, lambda k: (429, daily))
+    cm2 = CredentialManager({"key1": "KEY_A_1111", "key2": "KEY_B_2222"}, sticky=True); p2 = TwelveDataProvider(cm2)
+    assert p2.fetch("M5", 5, None) == (None, "PROVIDER_429") and "run out of API credits for the day" in p2.last_detail["M5"]
+    assert "KEY_" not in p2.last_detail["M5"]                                    # key text never leaks
+
+
+def test_exhausted_key_state_survives_restart_but_not_a_replaced_key():
+    from datetime import datetime, timedelta, timezone
+    from app.data.credential_manager import CredentialManager
+    saved = []
+    cm = CredentialManager({"key1": "a", "key2": "b"}, sticky=True)
+    cm.on_change = saved.append
+    cm.acquire(); cm.release_error("key1", 429, "out of credits for the day")
+    snap = saved[-1]
+    assert next(r for r in snap if r["label"] == "key1")["status"] == "QUOTA_EXHAUSTED"
+    # restart with the same keys: key1 stays parked, traffic goes to key2
+    cm2 = CredentialManager({"key1": "a", "key2": "b"}, sticky=True)
+    assert cm2.restore(snap) == 1 and cm2.acquire()[0] == "key2"
+    # restart after the owner replaced key1 with a new key: saved block must NOT apply
+    cm3 = CredentialManager({"key1": "NEW", "key2": "b"}, sticky=True)
+    assert cm3.restore(snap) == 0 and cm3.acquire()[0] == "key1"
+    # an expired block is not restored
+    cm4 = CredentialManager({"key1": "a"}, clock=lambda: datetime.now(timezone.utc) + timedelta(days=2), sticky=True)
+    assert cm4.restore(snap) == 0

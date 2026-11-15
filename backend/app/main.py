@@ -473,6 +473,13 @@ def build_from_env():
     else:
         store.save_strategy_version(cfg.version_hash(), cfg.raw(), "initial from strategy.yaml")
     creds = CredentialManager.from_env()
+    creds.restore(store.q("SELECT * FROM credential_state"))           # remember exhausted keys across restarts
+
+    def _save_state(rows):
+        for r in rows:
+            store.x("INSERT OR REPLACE INTO credential_state VALUES(?,?,?,?,?,?,?)",
+                    (r["label"], r["fp"], r["status"], r["available_at"], r["requests"], r["failures"], r["last_error"]))
+    creds.on_change = _save_state
     notifier = None
     tok, chat = os.environ.get("TELEGRAM_BOT_TOKEN", ""), os.environ.get("TELEGRAM_CHAT_ID", "")
     if tok and chat:

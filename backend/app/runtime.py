@@ -30,6 +30,7 @@ class GPTARuntime:
         self.last_cycle: str | None = None
         self.last_error: str | None = None
         self._last_m1: pd.Timestamp | None = None
+        self._logged_fail: dict[str, str] = {}
         self._lock = threading.Lock()
 
     # -- collection ----------------------------------------------------------------------------
@@ -40,12 +41,17 @@ class GPTARuntime:
             h = self.health[tf]
             if rep is None:
                 h.update(healthy=False, error=err)
+                detail = getattr(self.provider, "last_detail", {}).get(tf) or err
+                if self._logged_fail.get(tf) != detail:               # log changes, not every minute
+                    self._logged_fail[tf] = detail
+                    self.store.log("WARN", "data", f"{tf} fetch failed: {err} | {detail}")
                 self.store.x("INSERT INTO data_requests(ts,timeframe,ok,error,issues) VALUES(?,?,?,?,?)",
                              (now.isoformat(), tf, 0, err, "[]"))
                 continue
             corr = self.store.upsert_candles(self.instrument, tf, rep.accepted)
             for c in corr:
                 self.store.log("WARN", "data", f"historical correction ignored {c}")
+            self._logged_fail.pop(tf, None)
             h.update(healthy=rep.healthy and not corr, error=None, issues=rep.issues[-5:])
             if rep.healthy:
                 h["last_ok"] = now.isoformat()

@@ -7,6 +7,7 @@ that must be verified by the account owner (the manager does not assume it).
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import threading
 from dataclasses import dataclass, field
@@ -38,6 +39,7 @@ class Credential:
     failures: int = 0
     last_error: str | None = None
     last_used: datetime | None = None
+    fp: str = ''                                 # sha256 fingerprint prefix; lets saved state be matched to the same key
 
 
 class NoEligibleCredential(Exception):
@@ -55,7 +57,36 @@ class CredentialManager:
         self._clock = clock
         self._lock = threading.Lock()
         self._rr = 0
-        self.creds = {lbl: Credential(lbl, self._f.encrypt(k.encode())) for lbl, k in keys.items() if k}
+        self.creds = {lbl: Credential(lbl, self._f.encrypt(k.encode()), fp=hashlib.sha256(k.encode()).hexdigest()[:12])
+                      for lbl, k in keys.items() if k}
+        self.on_change = None        # optional callback(list[dict]) to persist key state (set by the app)
+
+    def _changed(self) -> None:
+        if self.on_change:
+            try:
+                self.on_change(self.snapshot())
+            except Exception:
+                pass                 # persistence is best-effort; never break a data request
+
+    def snapshot(self) -> list[dict]:
+        return [{"label": c.label, "fp": c.fp, "status": c.status.value,
+                 "available_at": c.available_at.isoformat() if c.available_at else None,
+                 "requests": c.requests, "failures": c.failures, "last_error": c.last_error} for c in self.creds.values()]
+
+    def restore(self, saved: list[dict]) -> int:
+        """Re-apply saved blocking states after a restart (only if it is the same key and the block has not expired)."""
+        n, now = 0, self._clock()
+        for r in saved:
+            c = self.creds.get(r["label"])
+            if not c or c.fp != r["fp"] or r["status"] not in ("QUOTA_EXHAUSTED", "INVALID", "RATE_LIMITED", "COOLDOWN"):
+                continue
+            until = datetime.fromisoformat(r["available_at"]) if r["available_at"] else None
+            if r["status"] != "INVALID" and (until is None or until <= now):
+                continue
+            c.status, c.available_at, c.last_error = KeyStatus(r["status"]), until, r.get("last_error")
+            c.requests, c.failures = r.get("requests", 0), r.get("failures", 0)
+            n += 1
+        return n
 
     @classmethod
     def from_env(cls, **kw) -> "CredentialManager":
@@ -127,6 +158,7 @@ class CredentialManager:
             else:
                 c.status = KeyStatus.COOLDOWN
                 c.available_at = now + timedelta(seconds=30)
+        self._changed()
 
     def set_disabled(self, label: str, disabled: bool):
         with self._lock:
