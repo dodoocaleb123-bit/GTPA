@@ -58,7 +58,8 @@ class Store:
 
     # -- candles ---------------------------------------------------------------------------
     def upsert_candles(self, instrument: str, tf: str, rows: list[dict], provider="twelvedata") -> list[dict]:
-        """Insert/update. Returns detected historical corrections (completed candle whose OHLC changed)."""
+        """Insert/update. A completed candle whose OHLC the provider later revises is overwritten with the provider's
+        latest values; the revisions applied are returned so the caller can log them."""
         corrections = []
         with self.lock:
             for r in rows:
@@ -69,7 +70,7 @@ class Store:
                         (r["open"], r["high"], r["low"], r["close"]):
                     corrections.append({"ts": ts, "timeframe": tf, "old": tuple(old)[:4],
                                         "new": (r["open"], r["high"], r["low"], r["close"])})
-                    continue  # keep the first completed value; a human must review the correction
+                    # fall through: store the provider's latest values (revisions are accepted, not blocked)
                 self.db.execute("INSERT OR REPLACE INTO market_candles VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                                 (instrument, tf, ts, r["open"], r["high"], r["low"], r["close"], r.get("volume"),
                                  provider, _now(), int(r["completed"]), "OK"))

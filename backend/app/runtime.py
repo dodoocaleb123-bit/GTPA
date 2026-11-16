@@ -50,9 +50,9 @@ class GPTARuntime:
                 continue
             corr = self.store.upsert_candles(self.instrument, tf, rep.accepted)
             for c in corr:
-                self.store.log("WARN", "data", f"historical correction ignored {c}")
+                self.store.log("INFO", "data", f"candle revised by provider, updated {c}")
             self._logged_fail.pop(tf, None)
-            h.update(healthy=rep.healthy and not corr, error=None, issues=rep.issues[-5:])
+            h.update(healthy=rep.healthy, error=None, issues=rep.issues[-5:])
             if rep.healthy:
                 h["last_ok"] = now.isoformat()
             self.store.x("INSERT INTO data_requests(ts,timeframe,ok,error,issues) VALUES(?,?,?,?,?)",

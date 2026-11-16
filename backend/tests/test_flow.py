@@ -396,3 +396,16 @@ def test_exhausted_key_state_survives_restart_but_not_a_replaced_key():
     # an expired block is not restored
     cm4 = CredentialManager({"key1": "a"}, clock=lambda: datetime.now(timezone.utc) + timedelta(days=2), sticky=True)
     assert cm4.restore(snap) == 0
+
+
+def test_provider_revisions_of_closed_candles_are_accepted_and_do_not_make_feed_unhealthy():
+    from app.database.store import Store
+    st = Store(":memory:")
+    t = pd.Timestamp("2026-11-16T00:05:00Z")
+    row = lambda lo, c: {"time": t, "open": 10.0, "high": 12.0, "low": lo, "close": c, "volume": None, "completed": True}
+    assert st.upsert_candles("XAU/USD", "M5", [row(9.0, 11.0)]) == []
+    rev = st.upsert_candles("XAU/USD", "M5", [row(8.5, 10.5)])
+    assert len(rev) == 1 and rev[0]["old"][2] == 9.0 and rev[0]["new"][2] == 8.5       # reported for the log...
+    got = st.candles("XAU/USD", "M5", 5).iloc[-1]
+    assert got["low"] == 8.5 and got["close"] == 10.5                                     # ...and the stored candle updated
+    assert st.upsert_candles("XAU/USD", "M5", [row(8.5, 10.5)]) == []                     # identical data: nothing to report
