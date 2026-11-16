@@ -9,6 +9,7 @@ pandas>=2.2             # [sandbox]
 PyYAML>=6.0             # [sandbox]
 cryptography>=42        # [sandbox] credential encryption
 httpx>=0.27             # Twelve Data / Telegram / ShowMyTrades clients (imported lazily)
+websockets>=12,<16      # Twelve Data real-time price stream
 requests>=2.31          # [sandbox] tests + MT5 bridge
 psycopg[binary]>=3.1    # PostgreSQL (store.py is plain SQL; see README "Going to PostgreSQL")
 pytest>=8

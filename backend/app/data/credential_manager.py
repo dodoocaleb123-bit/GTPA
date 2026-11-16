@@ -181,3 +181,15 @@ class CredentialManager:
                      "failures": c.failures, "credits_used": c.credits_used,
                      "credits_left": c.credits_left, "available_at": c.available_at.isoformat() if c.available_at else None,
                      "last_error": c.last_error} for c in self.creds.values()]
+
+    def stream_key(self) -> str | None:
+        """Return one usable key for the separate WebSocket credit pool without reserving an API request.
+
+        REST rate/quota cooldowns do not consume WebSocket credits; only invalid or explicitly disabled
+        credentials are skipped here. The returned secret is for the streaming client and is never logged.
+        """
+        with self._lock:
+            for c in self.creds.values():
+                if c.status not in (KeyStatus.INVALID, KeyStatus.DISABLED):
+                    return self._f.decrypt(c._secret).decode()
+        return None

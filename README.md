@@ -11,7 +11,7 @@ Signal generation + paper trading for XAU/USD, built to the *Detailed Software A
 | Qualification (16 checks, machine-readable rejection codes; unavailable data never passes) | Built, tested |
 | Signal lifecycle, duplicate guard, ambiguous TP/SL handling, expiry | Built, tested |
 | Paper trading + metrics, backtest engine (same orchestrator as live), out-of-sample split | Built, tested |
-| Twelve Data client, 4-key credential manager (encrypted, redacted), candle validator | Built; **client never run against the live API** (see below) |
+| Twelve Data REST candles, WebSocket live-price stream, 8-key credential manager, candle validator | Built and tested with fakes; **not yet verified against the live Twelve Data account** (see below) |
 | MT5 quote/spread engine + Windows bridge (`mt5_bridge/`) | Built; bridge logic tested with a fake MT5, **never run against a real terminal** |
 | News gate (USD events, ±30 min blackout, strict failure) | Built; **ShowMyTrades client is a stub** (see below) |
 | Telegram notifier (dedupe, retry, delivery tracking) + command bot | Built; sender/bot **never run against Telegram** |
@@ -19,7 +19,7 @@ Signal generation + paper trading for XAU/USD, built to the *Detailed Software A
 | Dashboard (9 pages) | Built, checked in a headless browser on simulated data |
 | Docker, `.env.example`, requirements | Written, **not built** (no Docker/network in the build sandbox) |
 
-**60 automated tests pass** (`cd backend && python -m pytest`). **No claim is made that the strategy is profitable.**
+**72 automated tests pass** (`cd backend && python -m pytest`). **No claim is made that the strategy is profitable.**
 Nothing has been run on real market data. A 30-day random-walk backtest ran without errors (43k steps, 34 s) and,
 as expected for noise, produced no qualified signals. Real validation = the blueprint's stages 1–4 (backtest on real
 history, out-of-sample, walk-forward, paper trading) — none of which have been done.
@@ -44,9 +44,12 @@ Until the news calendar is configured, **no signal can be published** (strict mo
 
 1. **ShowMyTrades**: I could not find public API documentation. `news/showmytrades_client.py` is a stub (set
    `SHOWMYTRADES_URL/KEY`, then adapt `fetch`). Until it works, the news check is UNAVAILABLE and blocks all signals.
-2. **Twelve Data**: request shape (`/time_series`, `1min/5min/15min/1h`, `api-credits-*` headers) follows their docs as I
-   know them; confirm XAU/USD availability, real credit usage and — important — that rotating four keys is allowed by
-   their terms for your accounts.
+2. **Twelve Data**: `/api/market/price` now uses a WebSocket tick when fresh; the strategy still uses completed REST OHLC
+   candles, and the candle close is not used as a tick fallback. Confirm XAU/USD WebSocket entitlement and live event
+   delivery on your account. Basic/Grow access is limited to permitted trial symbols; full access is available on Pro
+   (individual) or Venture (business) and above. The WebSocket subscription uses one WS credit per symbol, separately
+   from REST API credits. See [WebSocket docs](https://twelvedata.com/docs/websocket) and [plan details](https://support.twelvedata.com/en/articles/5335783-trial).
+   Also verify that using multiple keys is allowed by Twelve Data's terms for your accounts.
 3. **MT5**: confirm your broker's gold symbol (auto-discovered) and server clock offset (auto-estimated from the first tick; set `MT5_SERVER_UTC_OFFSET_SECONDS` to be exact). A wrong offset makes quotes look stale, which fails safe (no signals).
 4. Dev database is SQLite. `database/store.py` is plain SQL isolated in one class; moving to PostgreSQL means swapping that class (SQLAlchemy/psycopg were not installable in the build sandbox).
 

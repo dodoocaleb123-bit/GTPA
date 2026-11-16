@@ -161,13 +161,13 @@ def create_app(rt, *, token: str | None, scheduler=None, allow_no_auth: bool = F
                                for r in df.itertuples()]})
 
     def price(request):
-        df = rt.store.candles(rt.instrument, "M1", 1)
-        if df.empty:
-            return jr({"instrument": rt.instrument, "price": None, "label": "UNAVAILABLE"})
-        last = df.iloc[-1]
-        age = (datetime.now(timezone.utc) - last["time"].to_pydatetime()).total_seconds() - 60
-        return jr({"instrument": rt.instrument, "price": float(last["close"]), "candle_time": last["time"],
-                   "age_seconds": max(age, 0), "label": "LIVE" if rt.health["M1"]["healthy"] and age < 180 else "DELAYED"})
+        stream = getattr(rt, "price_stream", None)
+        if stream is None:
+            return jr({"instrument": rt.instrument, "price": None, "bid": None, "ask": None,
+                       "tick_time": None, "age_seconds": None, "label": "UNAVAILABLE",
+                       "source": "twelve_data_websocket", "stream_status": "NOT_CONFIGURED",
+                       "error": "No usable Twelve Data WebSocket key is configured"})
+        return jr(stream.snapshot(datetime.now(timezone.utc)))
 
     def timeframes(request):
         out = {}
@@ -457,6 +457,7 @@ def build_from_env():
     from .data.credential_manager import CredentialManager
     from .data.data_scheduler import Scheduler
     from .data.twelve_data import TwelveDataProvider
+    from .data.twelve_data_stream import TwelveDataPriceStream
     from .database.store import Store
     from .news.calendar_service import NewsGate
     from .news.showmytrades_client import ShowMyTradesClient
@@ -475,6 +476,11 @@ def build_from_env():
     creds = CredentialManager.from_env()
     creds.restore(store.q("SELECT * FROM credential_state"))           # remember exhausted keys across restarts
 
+    try:
+        tick_max_age = float(os.environ.get("GPTA_TICK_MAX_AGE_SECONDS", "30"))
+    except ValueError:
+        tick_max_age = 30.0
+
     def _save_state(rows):
         for r in rows:
             store.x("INSERT OR REPLACE INTO credential_state VALUES(?,?,?,?,?,?,?)",
@@ -487,23 +493,26 @@ def build_from_env():
     signals = SignalService(store, notifier, cfg, cfg.version_hash())
     rt = GPTARuntime(cfg, store, TwelveDataProvider(creds, cfg.instrument), SpreadEngine(cfg.spread),
                      NewsGate(cfg.news), signals, creds)
+    rt.price_stream = TwelveDataPriceStream(cfg.instrument, creds.stream_key, max_age_seconds=tick_max_age)
+    if not creds.stream_key():
+        rt.price_stream = None
     bot = None
     if tok and chat:
         from .paper_trading.engine import metrics  # noqa: F401  (command ctx uses rt read-models)
         bot = TelegramBot(tok, chat, lambda: _bot_ctx(rt))
     news_client = ShowMyTradesClient() if os.environ.get("SHOWMYTRADES_URL") else None
-    sched = Scheduler(rt, news_client, bot=bot)
+    sched = Scheduler(rt, news_client, bot=bot, price_stream=rt.price_stream)
     return rt, sched
 
 
 def _bot_ctx(rt) -> dict:
     st = rt.system_status()
     q = rt.spread.last
-    px = rt.store.candles(rt.instrument, "M1", 1)
+    px = rt.price_stream.snapshot() if getattr(rt, "price_stream", None) else {"price": None, "label": "UNAVAILABLE"}
     return {"health": {"data": st["data_label"], "database": st["database"], "last_cycle": st["last_cycle"], "mode": st["mode"]},
             "active": [s.as_dict() | {"signal_id": s.signal_id} for s in rt.signals.active()],
-            "market": {"price": None if px.empty else float(px["close"].iloc[-1]), "bid": q.bid if q else None,
-                       "ask": q.ask if q else None, "label": st["data_label"]} if not px.empty else {},
+            "market": {"price": px.get("price"), "tick_time": px.get("tick_time"), "source": px.get("source"),
+                       "bid": q.bid if q else None, "ask": q.ask if q else None, "label": px.get("label")},
             "performance": rt.performance(),
             "history": rt.store.q("SELECT signal_id,direction,state FROM signals ORDER BY created_at DESC LIMIT 10")}
 

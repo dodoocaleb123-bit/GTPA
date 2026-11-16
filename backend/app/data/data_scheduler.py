@@ -11,10 +11,10 @@ from datetime import datetime, timedelta, timezone
 
 class Scheduler:
     def __init__(self, rt, news_client=None, offset_seconds: float = 5.0, news_refresh_minutes: float = 30.0,
-                 daily_report_hour_utc: int = 21, bot=None):
+                 daily_report_hour_utc: int = 21, bot=None, price_stream=None):
         self.rt, self.news_client, self.offset = rt, news_client, offset_seconds
         self.news_every = news_refresh_minutes * 60
-        self.report_hour, self.bot = daily_report_hour_utc, bot
+        self.report_hour, self.bot, self.price_stream = daily_report_hour_utc, bot, price_stream
         self._stop = threading.Event()
         self._threads: list[threading.Thread] = []
         self.heartbeat: dict[str, str | None] = {"tick": None, "news": None}
@@ -26,6 +26,8 @@ class Scheduler:
         jobs = [("gpta-tick", self._tick_loop)]
         if self.news_client:
             jobs.append(("gpta-news", self._news_loop))
+        if self.price_stream:
+            jobs.append(("gpta-price-stream", self.price_stream.run_forever))
         if self.bot:
             jobs.append(("gpta-telegram", self.bot.run_forever))
         for name, fn in jobs:
@@ -35,6 +37,8 @@ class Scheduler:
 
     def stop(self) -> None:
         self._stop.set()
+        if self.price_stream:
+            self.price_stream.stop()
         if self.bot:
             self.bot.stop()
 

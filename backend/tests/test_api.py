@@ -60,13 +60,29 @@ def test_signal_endpoints_expose_the_engines_decision_and_audit(server):
 
 
 def test_market_endpoints_label_data_and_reject_bad_input(server):
-    base, *_ = server
+    base, rt, _ = server
     c = get(base, "/api/market/candles?timeframe=M5&limit=5").json()
     assert len(c["candles"]) == 5 and c["label"] in ("LIVE", "UNAVAILABLE")
     assert get(base, "/api/market/candles?timeframe=M3").status_code == 400
     assert get(base, "/api/market/candles?limit=abc").status_code == 400
     assert get(base, "/api/market/timeframes").json()["M1"]["stored"] > 0
     assert get(base, "/api/market/data-health").json()["baseline_requests_per_day"] == 5760
+    # There are M1 candles in this fixture, but the current-price endpoint must not present
+    # their close as a real-time price when the tick stream is not configured.
+    unavailable = get(base, "/api/market/price").json()
+    assert unavailable["price"] is None and unavailable["label"] == "UNAVAILABLE"
+    assert unavailable["source"] == "twelve_data_websocket"
+
+    from app.data.twelve_data_stream import TwelveDataPriceStream
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    stream = TwelveDataPriceStream("XAU/USD", lambda: None, clock=lambda: now)
+    stream.handle_event({"event": "price", "symbol": "XAU/USD", "timestamp": now.timestamp(),
+                         "price": 4200.75, "bid": 4200.70, "ask": 4200.80})
+    rt.price_stream = stream
+    live = get(base, "/api/market/price").json()
+    assert live["price"] == pytest.approx(4200.75) and live["label"] == "LIVE"
+    assert live["bid"] == pytest.approx(4200.70) and live["ask"] == pytest.approx(4200.80)
 
 
 def test_broker_quote_ingest_and_spread(server):
