@@ -31,11 +31,26 @@ class GPTARuntime:
         self.last_error: str | None = None
         self._last_m1: pd.Timestamp | None = None
         self._logged_fail: dict[str, str] = {}
+        self.candle_aggregator = None
         self._lock = threading.Lock()
 
     # -- collection ----------------------------------------------------------------------------
     def collect(self, now: datetime, sizes: dict[str, int] | None = None) -> None:
-        sizes = sizes or {tf: self.cfg.collection.history_bars[tf] if self._need_history(tf) else 5 for tf in TF_SECONDS}
+        aggregator = self.candle_aggregator
+        if aggregator:
+            aggregator.finalize_due(now)
+        if sizes is None and aggregator and aggregator.is_live(now):
+            # A live WebSocket now supplies the recent OHLC. Use REST only to fill missing history;
+            # if history is already warm, avoid replacing the streamed bars with polled candles.
+            sizes = {tf: self.cfg.collection.history_bars[tf] for tf in TF_SECONDS if self._need_history(tf)}
+            for tf in TF_SECONDS:
+                self.health[tf].update(healthy=True, error=None, issues=[])
+                self.health[tf]["last_ok"] = now.isoformat()
+            if not sizes:
+                return
+        elif sizes is None:
+            sizes = {tf: self.cfg.collection.history_bars[tf] if self._need_history(tf) else 5
+                     for tf in TF_SECONDS}
         results = collect_all(self.provider, self.instrument, sizes, now)
         for tf, (rep, err) in results.items():
             h = self.health[tf]
@@ -59,7 +74,8 @@ class GPTARuntime:
                          (now.isoformat(), tf, int(rep.healthy), None, str(rep.issues[-5:])))
 
     def _need_history(self, tf: str) -> bool:
-        have = self.store.q("SELECT COUNT(*) c FROM market_candles WHERE instrument=? AND timeframe=?", (self.instrument, tf))[0]["c"]
+        have = self.store.q("SELECT COUNT(*) c FROM market_candles WHERE instrument=? AND timeframe=? AND completed=1",
+                            (self.instrument, tf))[0]["c"]
         return have < self.cfg.collection.history_bars[tf] * 0.9
 
     # -- one strategy cycle -----------------------------------------------------------------------
@@ -126,6 +142,7 @@ class GPTARuntime:
         q = self.spread.last
         return {"time": now.isoformat(), "database": self.store.health(), "last_cycle": self.last_cycle,
                 "last_error": self.last_error, "data_health": self.health,
+                "tick_candles": self.candle_aggregator.status(now) if self.candle_aggregator else None,
                 "broker": q.as_dict(now) if q else {"connected": False},
                 "news": self.news.status(now), "credentials": self.creds.status() if self.creds else [],
                 "telegram_ok": self.signals.notifier.delivery_ok() if self.signals.notifier else None,

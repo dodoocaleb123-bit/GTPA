@@ -64,8 +64,10 @@ class Store:
         with self.lock:
             for r in rows:
                 ts = r["time"].isoformat()
-                old = self.db.execute("SELECT open,high,low,close,completed FROM market_candles WHERE instrument=? AND timeframe=? AND ts=?",
+                old = self.db.execute("SELECT open,high,low,close,completed,provider FROM market_candles WHERE instrument=? AND timeframe=? AND ts=?",
                                       (instrument, tf, ts)).fetchone()
+                if old and old["provider"] == "twelvedata_ws_ticks" and provider != "twelvedata_ws_ticks":
+                    continue  # REST polling remains available for history, but cannot replace tick-built live bars.
                 if old and old["completed"] and (old["open"], old["high"], old["low"], old["close"]) != \
                         (r["open"], r["high"], r["low"], r["close"]):
                     corrections.append({"ts": ts, "timeframe": tf, "old": tuple(old)[:4],

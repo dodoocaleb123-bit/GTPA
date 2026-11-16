@@ -84,6 +84,17 @@ def test_market_endpoints_label_data_and_reject_bad_input(server):
     assert live["price"] == pytest.approx(4200.75) and live["label"] == "LIVE"
     assert live["bid"] == pytest.approx(4200.70) and live["ask"] == pytest.approx(4200.80)
 
+    from app.data.tick_candles import TickCandleAggregator
+    from app.data.twelve_data_stream import PriceTick
+    aggregator = TickCandleAggregator(rt.store, rt.instrument)
+    aggregator.on_connected(now.replace(second=0, microsecond=0))
+    aggregator.ingest(PriceTick(rt.instrument, 4200.75, now, now))
+    rt.candle_aggregator = aggregator
+    chart = get(base, "/api/market/candles?timeframe=M1&limit=5").json()
+    assert chart["live_bar"] and chart["tick_stream_status"] == "SUBSCRIBED"
+    assert chart["candles"][-1]["completed"] is False
+    assert chart["candles"][-1]["coverage"] == "FULL"
+
 
 def test_broker_quote_ingest_and_spread(server):
     base, rt, _ = server

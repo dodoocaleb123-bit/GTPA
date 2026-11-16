@@ -40,13 +40,17 @@ class TwelveDataPriceStream:
 
     def __init__(self, symbol: str, api_key: Callable[[], str | None], *, max_age_seconds: float = 30.0,
                  connector: Callable | None = None, clock: Callable[[], datetime] | None = None,
-                 heartbeat_seconds: float = 10.0):
+                 heartbeat_seconds: float = 10.0, on_tick: Callable | None = None,
+                 on_connected: Callable | None = None, on_disconnected: Callable | None = None,
+                 on_idle: Callable | None = None):
         self.symbol = symbol
         self._api_key = api_key
         self.max_age_seconds = max(1.0, float(max_age_seconds))
         self._connector = connector or self._default_connector
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self.heartbeat_seconds = max(1.0, float(heartbeat_seconds))
+        self._on_tick, self._on_connected = on_tick, on_connected
+        self._on_disconnected, self._on_idle = on_disconnected, on_idle
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._tick: PriceTick | None = None
@@ -89,16 +93,22 @@ class TwelveDataPriceStream:
                 if not self._stop.is_set():
                     raise ConnectionError("stream closed")
             except StreamSubscriptionError as exc:
+                if self._on_disconnected:
+                    self._on_disconnected()
                 self._set_state("UNAVAILABLE", str(exc))
                 self._stop.wait(min(max(delay, 30.0), 300.0))
                 delay = min(max(delay * 2, 30.0), 300.0)
             except Exception as exc:
                 if self._stop.is_set():
                     break
+                if self._on_disconnected:
+                    self._on_disconnected()
                 # Do not expose exception text: WebSocket errors can include the API-key URL.
                 self._set_state("DISCONNECTED", f"WebSocket error: {type(exc).__name__}")
                 self._stop.wait(delay)
                 delay = min(delay * 2, 60.0)
+        if self._on_disconnected:
+            self._on_disconnected()
         self._set_state("STOPPED", None)
 
     def _consume(self, ws) -> None:
@@ -111,6 +121,8 @@ class TwelveDataPriceStream:
             try:
                 raw = ws.recv(timeout=1.0)
             except TimeoutError:
+                if self._on_idle:
+                    self._on_idle(self._clock())
                 continue
             try:
                 message = json.loads(raw)
@@ -120,6 +132,8 @@ class TwelveDataPriceStream:
 
     def handle_event(self, message: dict) -> None:
         """Apply one provider event. Public to keep parsing testable without network access."""
+        if not isinstance(message, dict):
+            return
         event = message.get("event")
         if event == "subscribe-status":
             success = message.get("success") or []
@@ -131,6 +145,8 @@ class TwelveDataPriceStream:
                     f"Twelve Data did not authorize the {self.symbol} stream; check API key, symbol and WebSocket plan access"
                 )
             self._set_state("SUBSCRIBED", None)
+            if self._on_connected:
+                self._on_connected(self._clock())
             return
         if event == "error":
             raise StreamSubscriptionError(
@@ -155,6 +171,8 @@ class TwelveDataPriceStream:
             self._tick = tick
             self._state = "SUBSCRIBED"
             self._error = None
+        if self._on_tick:
+            self._on_tick(tick)
 
     def snapshot(self, now: datetime | None = None) -> dict:
         now = now or self._clock()

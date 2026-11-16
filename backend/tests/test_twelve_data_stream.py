@@ -128,3 +128,21 @@ def test_scheduler_starts_and_stops_the_price_stream_worker():
     for thread in scheduler._threads:
         thread.join(2)
     assert all(not thread.is_alive() for thread in scheduler._threads)
+
+
+def test_stream_callbacks_feed_ticks_into_all_timeframe_aggregators():
+    from app.data.tick_candles import TickCandleAggregator
+    from app.database.store import Store
+
+    now = datetime(2026, 11, 16, 1, 0, 1, tzinfo=timezone.utc)
+    aggregator = TickCandleAggregator(Store(":memory:"), "XAU/USD")
+    stream = TwelveDataPriceStream(
+        "XAU/USD", lambda: "test-key", clock=lambda: now,
+        on_tick=aggregator.ingest, on_connected=aggregator.on_connected,
+        on_disconnected=aggregator.on_disconnected, on_idle=aggregator.finalize_due,
+    )
+    stream.handle_event({"event": "subscribe-status", "status": "ok",
+                         "success": [{"symbol": "XAU/USD"}], "fails": []})
+    stream.handle_event({"event": "price", "symbol": "XAU/USD", "timestamp": now.timestamp(), "price": 4200.75})
+
+    assert set(aggregator.current_bars()) == {"M1", "M5", "M15", "H1"}

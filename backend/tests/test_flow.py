@@ -239,7 +239,9 @@ def test_signal_service_blocks_sub_minimum_rr():
 class FakeProvider:
     def __init__(self, frames, fail=()):
         self.frames, self.fail = frames, set(fail)
+        self.calls = 0
     def fetch(self, tf, outputsize, now):
+        self.calls += 1
         if tf in self.fail:
             return None, "PROVIDER_500"
         iv = {"M1": "1min", "M5": "5min", "M15": "15min", "H1": "1h"}[tf]
@@ -293,6 +295,26 @@ def test_runtime_blocks_when_news_calendar_never_loaded_or_a_timeframe_fails():
     out = rt.tick(now)
     assert sent == [] and rt.health["M5"]["healthy"] is False
     assert rt.system_status()["data_label"] == "UNAVAILABLE"                # never labelled LIVE with a dead feed
+
+
+def test_runtime_skips_rest_polling_when_live_tick_stream_and_history_are_ready():
+    from datetime import timedelta
+
+    rt, _, now = build_runtime(build_buy_scenario())
+    rt.tick(now)  # bootstrap history through REST
+    provider_calls = rt.provider.calls
+    rt._need_history = lambda _tf: False  # model a fully warmed persistent database
+
+    class LiveAggregator:
+        def finalize_due(self, _now):
+            return 0
+
+        def is_live(self, _now):
+            return True
+
+    rt.candle_aggregator = LiveAggregator()
+    rt.tick(now + timedelta(minutes=1))
+    assert rt.provider.calls == provider_calls
 
 
 # ---- backtest --------------------------------------------------------------------------------------

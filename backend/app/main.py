@@ -155,10 +155,38 @@ def create_app(rt, *, token: str | None, scheduler=None, allow_no_auth: bool = F
         tf = request.query_params.get("timeframe", request.query_params.get("tf", "M15")).upper()
         if tf not in TF_SECONDS:
             raise ValueError("timeframe must be one of M1,M5,M15,H1")
-        df = rt.store.candles(rt.instrument, tf, qint(request, "limit", 300, 1, 2000))
-        return jr({"timeframe": tf, "label": label() if rt.health[tf]["healthy"] else "UNAVAILABLE", "provider": "twelvedata",
-                   "candles": [{"time": int(r.time.timestamp()), "open": r.open, "high": r.high, "low": r.low, "close": r.close}
-                               for r in df.itertuples()]})
+        limit = qint(request, "limit", 300, 1, 2000)
+        now = datetime.now(timezone.utc)
+        aggregator = getattr(rt, "candle_aggregator", None)
+        if aggregator:
+            aggregator.finalize_due(now)
+        stored = rt.store.q(
+            "SELECT ts,open,high,low,close,provider FROM market_candles "
+            "WHERE instrument=? AND timeframe=? AND completed=1 ORDER BY ts DESC LIMIT ?",
+            (rt.instrument, tf, limit),
+        )
+        candles = [{"time": int(datetime.fromisoformat(r["ts"]).timestamp()), "open": r["open"],
+                    "high": r["high"], "low": r["low"], "close": r["close"],
+                    "completed": True, "source": r["provider"]} for r in reversed(stored)]
+        forming = aggregator.current_bars().get(tf) if aggregator else None
+        if forming:
+            current_time = int(forming["time"].timestamp())
+            candles = [c for c in candles if c["time"] != current_time]
+            candles.append({"time": current_time, "open": forming["open"], "high": forming["high"],
+                            "low": forming["low"], "close": forming["close"], "completed": False,
+                            "coverage": forming["coverage"], "source": forming["provider"]})
+        candles.sort(key=lambda c: c["time"])
+        candles = candles[-limit:]
+        tick_state = rt.price_stream.snapshot(now) if getattr(rt, "price_stream", None) else None
+        if forming and tick_state and tick_state["label"] == "LIVE":
+            chart_label = "LIVE"
+        elif forming:
+            chart_label = "DELAYED"
+        else:
+            chart_label = label() if rt.health[tf]["healthy"] else "UNAVAILABLE"
+        return jr({"timeframe": tf, "label": chart_label, "provider": "twelvedata",
+                   "live_bar": bool(forming), "tick_stream_status": tick_state["stream_status"] if tick_state else "NOT_CONFIGURED",
+                   "candles": candles})
 
     def price(request):
         stream = getattr(rt, "price_stream", None)
@@ -171,17 +199,25 @@ def create_app(rt, *, token: str | None, scheduler=None, allow_no_auth: bool = F
 
     def timeframes(request):
         out = {}
+        aggregator = getattr(rt, "candle_aggregator", None)
         for tf in TF_SECONDS:
             r = rt.store.q("SELECT COUNT(*) n, MAX(ts) last FROM market_candles WHERE instrument=? AND timeframe=? AND completed=1", (rt.instrument, tf))[0]
-            out[tf] = {"stored": r["n"], "last_completed": r["last"], **rt.health[tf]}
+            current = aggregator.current_bars().get(tf) if aggregator else None
+            out[tf] = {"stored": r["n"], "last_completed": r["last"], "forming": bool(current),
+                       "forming_time": current["time"].isoformat() if current else None,
+                       "forming_coverage": current["coverage"] if current else None, **rt.health[tf]}
         return jr(out)
 
     def data_health(request):
+        now = datetime.now(timezone.utc)
         reqs = rt.store.q("SELECT timeframe, SUM(ok) ok, COUNT(*) n FROM data_requests WHERE ts > ? GROUP BY timeframe",
-                          ((datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),))
+                          ((now - timedelta(hours=1)).isoformat(),))
+        aggregator = getattr(rt, "candle_aggregator", None)
         return jr({"label": label(), "timeframes": rt.health, "requests_last_hour": reqs,
                    "credentials": rt.creds.status() if rt.creds else [],
-                   "baseline_requests_per_day": 4 * 60 * 24})
+                   "baseline_requests_per_day": 4 * 60 * 24,
+                   "collection_mode": "tick_stream" if aggregator and aggregator.is_live(now) else "rest_polling",
+                   "tick_candles": aggregator.status(now) if aggregator else None})
 
     # ---- broker / spread --------------------------------------------------------------------------
     def broker_quote(request):
@@ -458,6 +494,7 @@ def build_from_env():
     from .data.data_scheduler import Scheduler
     from .data.twelve_data import TwelveDataProvider
     from .data.twelve_data_stream import TwelveDataPriceStream
+    from .data.tick_candles import TickCandleAggregator
     from .database.store import Store
     from .news.calendar_service import NewsGate
     from .news.showmytrades_client import ShowMyTradesClient
@@ -493,7 +530,14 @@ def build_from_env():
     signals = SignalService(store, notifier, cfg, cfg.version_hash())
     rt = GPTARuntime(cfg, store, TwelveDataProvider(creds, cfg.instrument), SpreadEngine(cfg.spread),
                      NewsGate(cfg.news), signals, creds)
-    rt.price_stream = TwelveDataPriceStream(cfg.instrument, creds.stream_key, max_age_seconds=tick_max_age)
+    rt.candle_aggregator = TickCandleAggregator(store, cfg.instrument, max_tick_age_seconds=tick_max_age)
+    rt.price_stream = TwelveDataPriceStream(
+        cfg.instrument, creds.stream_key, max_age_seconds=tick_max_age,
+        on_tick=rt.candle_aggregator.ingest,
+        on_connected=rt.candle_aggregator.on_connected,
+        on_disconnected=rt.candle_aggregator.on_disconnected,
+        on_idle=rt.candle_aggregator.finalize_due,
+    )
     if not creds.stream_key():
         rt.price_stream = None
     bot = None
